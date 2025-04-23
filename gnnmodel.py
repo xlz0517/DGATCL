@@ -57,18 +57,8 @@ class GNNLayer(torch.nn.Module):
         n_node = nodes.shape[0]
         message = hs - hr
 
-        # sample edges w.r.t. alpha
-        if self.n_edge_topk > 0:
-            alpha = self.w_alpha(nn.ReLU()(self.Ws_attn(hs) + self.Wr_attn(hr) + self.Wqr_attn(h_qr))).squeeze(-1)
-            edge_prob = F.gumbel_softmax(alpha, tau=1, hard=False)
-            topk_index = torch.argsort(edge_prob, descending=True)[:self.n_edge_topk]
-            edge_prob_hard = torch.zeros((alpha.shape[0])).cuda()
-            edge_prob_hard[topk_index] = 1
-            alpha *= (edge_prob_hard - edge_prob.detach() + edge_prob)
-            alpha = torch.sigmoid(alpha).unsqueeze(-1)
-
-        else:
-            alpha = torch.sigmoid(self.w_alpha(
+        # 边级权重计算
+        alpha = torch.sigmoid(self.w_alpha(
                 nn.ReLU()(self.Ws_attn(hs) + self.Wr_attn(hr) + self.Wqr_attn(h_qr))))  # [N_edge_of_all_batch, 1]
 
         # aggregate message and then propagate
@@ -104,9 +94,7 @@ class GNNLayer(torch.nn.Module):
         node_scores = torch.ones((batchsize, self.n_ent)).cuda() * float('-inf')
         node_scores[diff_node[:, 0], diff_node[:, 1]] = diff_node_logit
 
-        # select top-k nodes
-        # (train mode) self.softmax == F.gumbel_softmax
-        # (eval mode)  self.softmax == F.softmax
+        # gumbel节点采样
         node_scores = self.softmax(node_scores)  # [batchsize, n_ent]
         # print(node_scores)
         topk_index = torch.topk(node_scores, self.n_node_topk, dim=1).indices.reshape(-1)
@@ -181,6 +169,7 @@ class GNNModel(torch.nn.Module):
                           1)  # [B, 2] with (batch_idx, node_idx)
         hidden = torch.zeros(n, self.hidden_dim).cuda()  # [B, dim]
 
+        # 多层GNN之间的消息传递
         for i in range(self.n_layer):
             nodes, edges, old_nodes_new_idx = self.loader.get_neighbors(nodes.data.cpu().numpy(), n, mode=mode)
             n_node = nodes.size(0)
@@ -191,6 +180,7 @@ class GNNModel(torch.nn.Module):
             h0 = torch.zeros(1, n_node, hidden.size(1)).cuda().index_copy_(1, old_nodes_new_idx, h0)
             h0 = h0[0, sampled_nodes_idx, :].unsqueeze(0)
             hidden = self.dropout(hidden)
+            # GRU聚合GNN层与层之间的实体嵌入表示
             hidden, h0 = self.gate(hidden.unsqueeze(0), h0)
             hidden = hidden.squeeze(0)
 
@@ -252,7 +242,7 @@ class ContrastiveLoss(nn.Module):
         else:
             raise ValueError('Unknown mode: {}'.format(self.contrast_mode))
 
-        # compute logits
+        # 正样本相似度
         anchor_dot_contrast = torch.div(
             torch.matmul(anchor_feature, contrast_feature.T),
             self.temperature)
@@ -261,7 +251,6 @@ class ContrastiveLoss(nn.Module):
         logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
         logits = anchor_dot_contrast - logits_max.detach()
 
-        # tile mask
         mask = mask.repeat(anchor_count, contrast_count)
         # mask-out self-contrast cases
         logits_mask = torch.scatter(
@@ -272,19 +261,27 @@ class ContrastiveLoss(nn.Module):
         )
         mask = mask * logits_mask
         exp_logits = torch.exp(logits) * logits_mask
+        # 负样本
         h_neg = neg_features[:, 0, :]
         t_neg = neg_features[:, 1, :]
-        sim_neg = F.cosine_similarity(h_neg, t_neg, dim=-1) / self.temperature
-        sim_neg = sim_neg.view(B, K)
+        h_neg = h_neg.view(B, K, -1)   # [B, K, dim]
+        t_neg = t_neg.view(B, K, -1)   # [B, K, dim]
 
-        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))
+        anchor = features[:, 0, :]  # [B, dim]
+        anchor_expand = anchor.unsqueeze(1).expand(-1, K, -1)  # [B, K, dim]
 
-        mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
+        sim_neg = F.cosine_similarity(anchor_expand, t_neg, dim=-1)  # [B, K]
+        sim_neg = sim_neg / self.temperature
 
-        pos_per_sample = mask.sum(1)  # B
-        pos_per_sample[pos_per_sample < 1e-6] = 1.0
-        mean_log_prob_pos = (mask * log_prob).sum(1) / pos_per_sample  # mask.sum(1)
+        # 整合正负样本
+        sim_pos = F.cosine_similarity(anchor, features[:, 1, :], dim=-1).unsqueeze(1)
+        sim_pos = sim_pos / self.temperature
+        logits_all = torch.cat([sim_pos, sim_neg], dim=1)
+        log_prob_all = logits_all - torch.logsumexp(logits_all, dim=1, keepdim=True)
+        pos_mask = torch.zeros_like(log_prob_all).to(device)
+        pos_mask[:, 0] = 1
 
+        mean_log_prob_pos = (pos_mask * log_prob_all).sum(1)  # [B]
         loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos
         loss = loss.view(anchor_count, batch_size).mean()
 
