@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import time
 import numpy as np
-from torch_scatter import scatter
+from torch_scatter import scatter, scatter_softmax
 from collections import defaultdict
 
 
@@ -28,6 +28,9 @@ class GNNLayer(torch.nn.Module):
         self.W_h = nn.Linear(in_dim, out_dim, bias=False)
         self.W_samp = nn.Linear(in_dim, 1, bias=False)
         self.W_node_attn = nn.Linear(in_dim, 1, bias=False)
+        self.attn_fc = nn.Linear(2 * dim, 1)  
+        self.W_node = nn.Linear(dim, dim)     
+        self.leaky_relu = nn.LeakyReLU(0.2)
 
     def train(self, mode=True):
         if not isinstance(mode, bool):
@@ -42,9 +45,6 @@ class GNNLayer(torch.nn.Module):
         return self
 
     def forward(self, q_sub, q_rel, hidden, edges, nodes, old_nodes_new_idx, batchsize):
-        # edges: [N_edge_of_all_batch, 6]
-        # with (batch_idx, head, rela, tail, head_idx, tail_idx)
-        # note that head_idx and tail_idx are relative index
         sub = edges[:, 4]
         rel = edges[:, 2]
         obj = edges[:, 5]
@@ -54,7 +54,7 @@ class GNNLayer(torch.nn.Module):
         h_qr = self.rela_embed(q_rel)[r_idx]
         n_node = nodes.shape[0]
         message = hs - hr
-        # 注意力
+        
         alpha = torch.sigmoid(self.w_alpha(
                 nn.ReLU()(self.Ws_attn(hs) + self.Wr_attn(hr) + self.Wqr_attn(h_qr))))  # [N_edge_of_all_batch, 1]
         # aggregate message and then propagate
@@ -62,10 +62,19 @@ class GNNLayer(torch.nn.Module):
         message_agg = scatter(message, index=obj, dim=0, dim_size=n_node, reduce='max')#
         hidden_new = self.act(self.W_h(message_agg))  # [n_node, dim]
         hidden_new = hidden_new.clone()
-        node_attention_scores = self.W_node_attn(hidden_new)
+        
+        node_attention_scores = self.leaky_relu(self.attn_fc(torch.cat([hidden_new[sub], hidden_new[obj]], dim=-1))).squeeze(-1)
+        node_attention_weights = scatter_softmax(node_attention_scores, sub)
         node_attention_weights = self.softmax(node_attention_scores)
-        hidden_new = hidden_new * node_attention_weights
-        # forward without node sampling
+        hidden_new = scatter(
+            node_attention_weights.unsqueeze(-1) * self.W_node(hidden_new[obj]),
+            sub,
+            dim=0,
+            dim_size=n_node,
+            reduce='sum'
+        )
+        hidden_new = self.act(hidden_new)
+        
         if self.n_node_topk <= 0:
             return hidden_new
         # print('-------------')
