@@ -29,7 +29,7 @@ class DataLoader:
         self.n_ent = n_ent
         self.n_rel = n_rel
 
-        # prepare triples
+        
         self.filters = defaultdict(lambda:set())
         self.fact_triple  = self.read_triples('facts.txt')
         self.train_triple = self.read_triples('train.txt')
@@ -38,7 +38,7 @@ class DataLoader:
         self.all_triple = np.concatenate([np.array(self.fact_triple), np.array(self.train_triple)], axis=0)
         self.tmp_all_triple = np.concatenate([np.array(self.fact_triple), np.array(self.train_triple), np.array(self.valid_triple), np.array(self.test_triple)], axis=0)
         
-        # add inverse
+        
         self.fact_data  = self.double_triple(self.fact_triple)
         self.train_data = np.array(self.double_triple(self.train_triple))
         self.valid_data = self.double_triple(self.valid_triple)
@@ -116,7 +116,7 @@ class DataLoader:
         node_1hot     = csr_matrix((np.ones(len(nodes)), (nodes[:,1], nodes[:,0])), shape=(self.n_ent, nodes.shape[0]))
         edge_1hot     = M_sub.dot(node_1hot)
         edges         = np.nonzero(edge_1hot)
-        # {batch_idx} + {head, rela, tail} -> concat -> [N_edge_of_all_batch, 4] with (batch_idx, head, rela, tail)
+        
         sampled_edges = np.concatenate([np.expand_dims(edges[1],1), KG[edges[0]]], axis=1)
         sampled_edges = torch.LongTensor(sampled_edges).cuda()
 
@@ -150,22 +150,20 @@ class DataLoader:
         return subs, rels, objs
 
     def negative_sampling(self, triple):
-        # 获取所有实体 ID 的列表
+        
         entity_ids = list(self.entity2id.values())
         pos_tail = triple[:,2]
-        mask = np.ones([self.n_ent], dtype=np.bool)  # one-hot编码的变形
-        mask[pos_tail] = 0  # 将真实出现的标签位置标记为0,在下一步中，只在为1的位置进行采样，也就是负采样
-        # 确保负采样的数量与 pos_tail 大小一致
+        mask = np.ones([self.n_ent], dtype=np.bool)
+        mask[pos_tail] = 0
+        
         neg_tail = np.int32(
             np.random.choice(
                 np.array(entity_ids)[mask],
-                size=pos_tail.size * self.args.neg_sample_ratio,  # 采样数量调整
+                size=pos_tail.size * self.args.neg_sample_ratio,
                 replace=False
             )
         ).reshape([-1])
 
-        # 将 pos_tail 和 neg_tail 合并后返回
-        # neg_tail = np.concatenate((pos_tail.reshape([-1]), neg_tail[:pos_tail.size]))  # 截取到 pos_tail 的大小
         return neg_tail[:pos_tail.size]
 
     def shuffle_train(self):
