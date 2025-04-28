@@ -104,17 +104,14 @@ class Base(object):
 
             features = torch.cat((new_triple[:, 0].unsqueeze(1), new_triple[:, 2].unsqueeze(1)), dim=1).unsqueeze(
                 -1).float().to(torch.device(f'cuda:{self.args.gpu}'))
-            with torch.no_grad():
-                # 获取尾实体邻居
-                tail_nodes, _, _ = self.get_neighbors(new_triple[:, 2].unsqueeze(-1).cpu().numpy(),
-                                                      num_sample=batch_size)
-                neg_tail_ids = torch.tensor(tail_nodes[:, 1], device=new_triple.device).long()  # 只取尾实体 ID
-                
-                neg_features = torch.cat((new_triple[:, 0].unsqueeze(1), neg_tail_ids.unsqueeze(1)),
-                                         dim=1).unsqueeze(
-                    -1).float()  # [B, 2, 1]
+            neighbors, sampled_edges, old_nodes_new_idx = self.loader.get_neighbors(nodes.data.cpu().numpy(),
+                                                                                    batch_size, mode='train')
+
+            batch_size = head_emb.size(0)
+            negative_tail_emb = hidden[old_nodes_new_idx[:batch_size]]
+            negative_features = torch.stack([head_emb, negative_tail_emb], dim=1)  # [B, 2, dim]
             # 对比损失
-            CL_loss = self.CL(features, neg_features, labels=torch.LongTensor(triple[:, 2]).cuda())  # triple[:, 2]
+            CL_loss = self.CL(features, negative_features, labels=torch.LongTensor(triple[:, 2]).cuda())  # triple[:, 2]
 
             # 联合训练对比损失和二进制交叉熵损失
             total_loss = 0.8 * bce_loss + 0.2 * CL_loss
