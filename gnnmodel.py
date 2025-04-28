@@ -28,8 +28,8 @@ class GNNLayer(torch.nn.Module):
         self.W_h = nn.Linear(in_dim, out_dim, bias=False)
         self.W_samp = nn.Linear(in_dim, 1, bias=False)
         self.W_node_attn = nn.Linear(in_dim, 1, bias=False)
-        self.attn_fc = nn.Linear(2 * dim, 1)  
-        self.W_node = nn.Linear(dim, dim)     
+        self.attn_fc = nn.Linear(2 * in_dim, 1)
+        self.W_node = nn.Linear(in_dim, in_dim)     
         self.leaky_relu = nn.LeakyReLU(0.2)
 
     def train(self, mode=True):
