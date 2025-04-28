@@ -7,7 +7,6 @@ from load_data import DataLoader
 from base import Base
 from utils import *
 
-''' main script of DGATCL'''
 parser = argparse.ArgumentParser(description="Parser for DGATCL")
 parser.add_argument('--data_path', type=str, default='data/fb15k-237/')
 parser.add_argument('--seed', type=int, default=1234)
@@ -27,9 +26,7 @@ parser.add_argument('--remove_1hop_edges', action='store_true')
 parser.add_argument('--fact_ratio', type=float, default=0.96)
 parser.add_argument('--epoch', type=int, default=150)
 parser.add_argument('--eval_interval', type=int, default=1)
-
 parser.add_argument("--neg_sample_ratio", type=int, default=2, help="description for experiment")
-
 parser.add_argument('--k_h', type=int, default=10)
 parser.add_argument('--k_w', type=int, default=20)
 parser.add_argument('--ent_drop_pred', type=float, default=0.3)
