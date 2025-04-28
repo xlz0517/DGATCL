@@ -27,9 +27,7 @@ class GNNLayer(torch.nn.Module):
         self.w_alpha = nn.Linear(attn_dim, 1)
         self.W_h = nn.Linear(in_dim, out_dim, bias=False)
         self.W_samp = nn.Linear(in_dim, 1, bias=False)
-
-        # 额外添加的节点间注意力层
-        self.W_node_attn = nn.Linear(in_dim, 1, bias=False)  # 用于计算节点间的注意力权重
+        self.W_node_attn = nn.Linear(in_dim, 1, bias=False)
 
     def train(self, mode=True):
         if not isinstance(mode, bool):
@@ -56,45 +54,33 @@ class GNNLayer(torch.nn.Module):
         h_qr = self.rela_embed(q_rel)[r_idx]
         n_node = nodes.shape[0]
         message = hs - hr
-
-        # 边级权重计算
+        # 注意力
         alpha = torch.sigmoid(self.w_alpha(
                 nn.ReLU()(self.Ws_attn(hs) + self.Wr_attn(hr) + self.Wqr_attn(h_qr))))  # [N_edge_of_all_batch, 1]
-
         # aggregate message and then propagate
         message = alpha * message
         message_agg = scatter(message, index=obj, dim=0, dim_size=n_node, reduce='max')#
         hidden_new = self.act(self.W_h(message_agg))  # [n_node, dim]
         hidden_new = hidden_new.clone()
-
-        # **节点间的注意力机制**
-        # 计算每个节点之间的注意力权重
-        node_attention_scores = self.W_node_attn(hidden_new)  # 计算每个节点的注意力得分
-        node_attention_weights = self.softmax(node_attention_scores)  # Softmax归一化
-
-        # 将注意力权重应用到节点的信息传递上
-        hidden_new = hidden_new * node_attention_weights  # 基于注意力权重调整节点特征
-
+        node_attention_scores = self.W_node_attn(hidden_new)
+        node_attention_weights = self.softmax(node_attention_scores)
+        hidden_new = hidden_new * node_attention_weights
         # forward without node sampling
         if self.n_node_topk <= 0:
             return hidden_new
-
         # print('-------------')
-        # forward with node sampling
-        # indexing sampling operation
         tmp_diff_node_idx = torch.ones(n_node)
         tmp_diff_node_idx[old_nodes_new_idx] = 0
         bool_diff_node_idx = tmp_diff_node_idx.bool()
         diff_node = nodes[bool_diff_node_idx]
-
         # project logit to fixed-size tensor via indexing
         diff_node_logit = self.W_samp(hidden_new[bool_diff_node_idx]).squeeze(-1)  # [all_batch_new_nodes]
 
-        # save logit to node_scores for later indexing
+        
         node_scores = torch.ones((batchsize, self.n_ent)).cuda() * float('-inf')
         node_scores[diff_node[:, 0], diff_node[:, 1]] = diff_node_logit
 
-        # gumbel节点采样
+        # 采样
         node_scores = self.softmax(node_scores)  # [batchsize, n_ent]
         # print(node_scores)
         topk_index = torch.topk(node_scores, self.n_node_topk, dim=1).indices.reshape(-1)
@@ -104,17 +90,17 @@ class GNNLayer(torch.nn.Module):
         batch_topk_nodes = torch.zeros((batchsize, self.n_ent)).cuda()
         batch_topk_nodes[topk_batchidx, topk_index] = 1
 
-        # get sampled nodes' relative index
+        
         bool_sampled_diff_nodes_idx = batch_topk_nodes[diff_node[:, 0], diff_node[:, 1]].bool()
         bool_same_node_idx = ~bool_diff_node_idx.cuda()
         bool_same_node_idx[bool_diff_node_idx] = bool_sampled_diff_nodes_idx
 
-        # update node embeddings
+        
         diff_node_prob_hard = batch_topk_nodes[diff_node[:, 0], diff_node[:, 1]]
         diff_node_prob = node_scores[diff_node[:, 0], diff_node[:, 1]]
         hidden_new[bool_diff_node_idx] *= (diff_node_prob_hard - diff_node_prob.detach() + diff_node_prob).unsqueeze(-1)
 
-        # extract sampled nodes an their embeddings
+        
         new_nodes = nodes[bool_same_node_idx]
         hidden_new = hidden_new[bool_same_node_idx]
 
@@ -247,12 +233,12 @@ class ContrastiveLoss(nn.Module):
             torch.matmul(anchor_feature, contrast_feature.T),
             self.temperature)
 
-        # for numerical stability
+        
         logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
         logits = anchor_dot_contrast - logits_max.detach()
 
         mask = mask.repeat(anchor_count, contrast_count)
-        # mask-out self-contrast cases
+        
         logits_mask = torch.scatter(
             torch.ones_like(mask),
             1,
