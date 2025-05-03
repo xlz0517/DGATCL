@@ -166,7 +166,8 @@ class GNNModel(torch.nn.Module):
         ], dim=1)  # [B, 2] 形如 (batch_idx, entity_id)
     
         entity_features = torch.zeros(batch_size, self.hidden_dim, device=device)
-    
+
+        # 多层gnn之间的消息传递
         for layer_idx in range(self.n_layer):
             sampled_node_pairs, edge_index_matrix, index_old_to_new = self.loader.get_neighbors(
                 batch_entity_pairs.data.cpu().numpy(),
