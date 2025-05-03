@@ -44,77 +44,76 @@ class GNNLayer(torch.nn.Module):
             module.train(mode)
         return self
 
-    def forward(self, q_sub, q_rel, hidden, edges, nodes, old_nodes_new_idx, batchsize):
-        sub = edges[:, 4]
-        rel = edges[:, 2]
-        obj = edges[:, 5]
-        hs = hidden[sub]
-        hr = self.rela_embed(rel)
-        r_idx = edges[:, 0]
-        h_qr = self.rela_embed(q_rel)[r_idx]
-        n_node = nodes.shape[0]
-        message = hs - hr
-        
-        alpha = torch.sigmoid(self.w_alpha(
-                nn.ReLU()(self.Ws_attn(hs) + self.Wr_attn(hr) + self.Wqr_attn(h_qr))))  # [N_edge_of_all_batch, 1]
-        # aggregate message and then propagate
-        message = alpha * message
-        message_agg = scatter(message, index=obj, dim=0, dim_size=n_node, reduce='max')#
-        hidden_new = self.act(self.W_h(message_agg))  # [n_node, dim]
-        hidden_new = hidden_new.clone()
-        
-        node_attention_scores = self.leaky_relu(self.attn_fc(torch.cat([hidden_new[sub], hidden_new[obj]], dim=-1))).squeeze(-1)
-        node_attention_weights = scatter_softmax(node_attention_scores, sub)
-        node_attention_weights = self.softmax(node_attention_scores)
-        hidden_new = scatter(
-            node_attention_weights.unsqueeze(-1) * self.W_node(hidden_new[obj]),
-            sub,
-            dim=0,
-            dim_size=n_node,
-            reduce='sum'
+    def forward(self, query_subs, query_rels, node_features, edge_index, node_index, old_node_map, batch_size):
+        edge_sub = edge_index[:, 4]
+        edge_rel = edge_index[:, 2]
+        edge_obj = edge_index[:, 5]
+    
+        src_entity_feat = node_features[edge_sub]
+        relation_feat = self.rela_embed(edge_rel)
+        query_rel_expanded = self.rela_embed(query_rels)[edge_index[:, 0]]
+    
+        num_nodes = node_index.shape[0]
+        msg_content = src_entity_feat - relation_feat
+
+        # 注意力
+        attn_raw = self.w_alpha(
+            nn.ReLU()(self.Ws_attn(src_entity_feat) + self.Wr_attn(relation_feat) + self.Wqr_attn(query_rel_expanded))
         )
-        hidden_new = self.act(hidden_new)
-        
+        attn_weights = torch.sigmoid(attn_raw)
+        msg_weighted = attn_weights * msg_content
+    
+        msg_aggregated = scatter(msg_weighted, index=edge_obj, dim=0, dim_size=num_nodes, reduce='max')
+        node_transformed = self.act(self.W_h(msg_aggregated)).clone()
+    
+        node_pair = torch.cat([node_transformed[edge_sub], node_transformed[edge_obj]], dim=-1)
+        attn_score = self.leaky_relu(self.attn_fc(node_pair)).squeeze(-1)
+        edge_weights = scatter_softmax(attn_score, edge_sub)
+        edge_weights = self.softmax(attn_score)
+
+        edge_msgs = self.W_node(node_transformed[edge_obj])
+        node_msg_updated = scatter(edge_weights.unsqueeze(-1) * edge_msgs,
+                                   edge_sub, dim=0, dim_size=num_nodes, reduce='sum')
+        updated_node_features = self.act(node_msg_updated)
+    
         if self.n_node_topk <= 0:
-            return hidden_new
-        # print('-------------')
-        tmp_diff_node_idx = torch.ones(n_node)
-        tmp_diff_node_idx[old_nodes_new_idx] = 0
-        bool_diff_node_idx = tmp_diff_node_idx.bool()
-        diff_node = nodes[bool_diff_node_idx]
-        # project logit to fixed-size tensor via indexing
-        diff_node_logit = self.W_samp(hidden_new[bool_diff_node_idx]).squeeze(-1)  # [all_batch_new_nodes]
-
-        
-        node_scores = torch.ones((batchsize, self.n_ent)).cuda() * float('-inf')
-        node_scores[diff_node[:, 0], diff_node[:, 1]] = diff_node_logit
-
+            return updated_node_features
         # 采样
-        node_scores = self.softmax(node_scores)  # [batchsize, n_ent]
-        # print(node_scores)
-        topk_index = torch.topk(node_scores, self.n_node_topk, dim=1).indices.reshape(-1)
-        # print(topk_index)
-        #print(1 / 0)
-        topk_batchidx = torch.arange(batchsize).repeat(self.n_node_topk, 1).T.reshape(-1)
-        batch_topk_nodes = torch.zeros((batchsize, self.n_ent)).cuda()
-        batch_topk_nodes[topk_batchidx, topk_index] = 1
+        diff_flags = torch.ones(num_nodes)
+        diff_flags[old_node_map] = 0
+        diff_mask = diff_flags.bool()
+        diff_node_index = node_index[diff_mask]
+    
+        sampled_logits = self.W_samp(updated_node_features[diff_mask]).squeeze(-1)
+    
+        all_node_scores = torch.ones((batch_size, self.n_ent)).cuda() * float('-inf')
+        all_node_scores[diff_node_index[:, 0], diff_node_index[:, 1]] = sampled_logits
+        all_node_scores = self.softmax(all_node_scores)
+    
+        topk_ids = torch.topk(all_node_scores, self.n_node_topk, dim=1).indices.reshape(-1)
+        topk_batch_ids = torch.arange(batch_size).repeat(self.n_node_topk, 1).T.reshape(-1)
+    
+        topk_mask = torch.zeros((batch_size, self.n_ent)).cuda()
+        topk_mask[topk_batch_ids, topk_ids] = 1
 
-        
-        bool_sampled_diff_nodes_idx = batch_topk_nodes[diff_node[:, 0], diff_node[:, 1]].bool()
-        bool_same_node_idx = ~bool_diff_node_idx.cuda()
-        bool_same_node_idx[bool_diff_node_idx] = bool_sampled_diff_nodes_idx
+        diff_prob_selected = topk_mask[diff_node_index[:, 0], diff_node_index[:, 1]].bool()
+        same_mask = ~diff_mask.cuda()
+        same_mask[diff_mask] = diff_prob_selected
+    
+        topk_confidence = topk_mask[diff_node_index[:, 0], diff_node_index[:, 1]]
+        soft_confidence = all_node_scores[diff_node_index[:, 0], diff_node_index[:, 1]]
 
-        
-        diff_node_prob_hard = batch_topk_nodes[diff_node[:, 0], diff_node[:, 1]]
-        diff_node_prob = node_scores[diff_node[:, 0], diff_node[:, 1]]
-        hidden_new[bool_diff_node_idx] *= (diff_node_prob_hard - diff_node_prob.detach() + diff_node_prob).unsqueeze(-1)
+        updated_node_features[diff_mask] *= (
+            topk_confidence - soft_confidence.detach() + soft_confidence
+        ).unsqueeze(-1)
 
-        
-        new_nodes = nodes[bool_same_node_idx]
-        hidden_new = hidden_new[bool_same_node_idx]
+        new_node_index = node_index[same_mask]
+        final_node_features = updated_node_features[same_mask]
 
-        return hidden_new, new_nodes, bool_same_node_idx
+        return final_node_features, new_node_index, same_mask
 
+
+    
 
 class GNNModel(torch.nn.Module):
     def __init__(self, params, loader):
@@ -154,40 +153,50 @@ class GNNModel(torch.nn.Module):
         for i in range(self.n_layer):
             self.gnn_layers[i].W_samp.apply(freeze)
 
-    def forward(self, subs, rels, mode='train'):
-        n = len(subs)  # n == B (Batchsize)
-        q_sub = torch.LongTensor(subs).cuda()  # [B]
-        q_rel = torch.LongTensor(rels).cuda()  # [B]
-        # print(rels)
-        h0 = torch.zeros((1, n, self.hidden_dim)).cuda()  # [1, B, dim]
-        nodes = torch.cat([torch.arange(n).unsqueeze(1).cuda(), q_sub.unsqueeze(1)],
-                          1)  # [B, 2] with (batch_idx, node_idx)
-        hidden = torch.zeros(n, self.hidden_dim).cuda()  # [B, dim]
+    def forward(self, input_sub_ids, input_rel_ids, mode='train'):
+        batch_size = len(input_sub_ids)
+        query_sub_ids = torch.LongTensor(input_sub_ids).cuda()  # [B]
+        query_rel_ids = torch.LongTensor(input_rel_ids).cuda()  # [B]
+        device = query_sub_ids.device
+    
+        init_hidden_state = torch.zeros((1, batch_size, self.hidden_dim), device=device)
+        batch_entity_pairs = torch.cat([
+            torch.arange(batch_size).unsqueeze(1).cuda(),
+            query_sub_ids.unsqueeze(1)
+        ], dim=1)  # [B, 2] 形如 (batch_idx, entity_id)
+    
+        entity_features = torch.zeros(batch_size, self.hidden_dim, device=device)
+    
+        for layer_idx in range(self.n_layer):
+            sampled_node_pairs, edge_index_matrix, index_old_to_new = self.loader.get_neighbors(
+                batch_entity_pairs.data.cpu().numpy(),
+                batch_size,
+                mode=mode
+            )
+            total_sampled_nodes = sampled_node_pairs.size(0)
+    
+            entity_features, sampled_node_pairs, selected_node_indices = self.gnn_layers[layer_idx](
+                query_sub_ids, query_rel_ids, entity_features,
+                edge_index_matrix, sampled_node_pairs,
+                index_old_to_new, batch_size
+            )
+    
+            updated_hidden = torch.zeros(1, total_sampled_nodes, entity_features.size(1), device=device)
+            updated_hidden.index_copy_(1, index_old_to_new, init_hidden_state)
+    
+            init_hidden_state = updated_hidden[0, selected_node_indices, :].unsqueeze(0)
+            entity_features = self.dropout(entity_features)
+    
+            entity_features, init_hidden_state = self.gate(entity_features.unsqueeze(0), init_hidden_state)
+            entity_features = entity_features.squeeze(0)
+    
+        final_scores = self.W_final(entity_features).squeeze(-1)
+    
+        all_entity_scores = torch.zeros((batch_size, self.loader.n_ent)).cuda()
+        all_entity_scores[[sampled_node_pairs[:, 0], sampled_node_pairs[:, 1]]] = final_scores
+    
+        return all_entity_scores, entity_features, sampled_node_pairs
 
-        # 多层GNN之间的消息传递
-        for i in range(self.n_layer):
-            nodes, edges, old_nodes_new_idx = self.loader.get_neighbors(nodes.data.cpu().numpy(), n, mode=mode)
-            n_node = nodes.size(0)
-
-            hidden, nodes, sampled_nodes_idx = self.gnn_layers[i](q_sub, q_rel, hidden, edges, nodes, old_nodes_new_idx,
-                                                                  n)
-
-            h0 = torch.zeros(1, n_node, hidden.size(1)).cuda().index_copy_(1, old_nodes_new_idx, h0)
-            h0 = h0[0, sampled_nodes_idx, :].unsqueeze(0)
-            hidden = self.dropout(hidden)
-            # GRU聚合GNN层与层之间的实体嵌入表示
-            hidden, h0 = self.gate(hidden.unsqueeze(0), h0)
-            hidden = hidden.squeeze(0)
-
-
-        scores = self.W_final(hidden).squeeze(-1)
-        # print(scores)
-
-        scores_all = torch.zeros((n, self.loader.n_ent)).cuda()
-
-        scores_all[[nodes[:, 0], nodes[:, 1]]] = scores
-
-        return scores_all, hidden, nodes
 
 class ContrastiveLoss(nn.Module):
 
