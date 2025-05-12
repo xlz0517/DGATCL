@@ -34,6 +34,16 @@ parser.add_argument('--conv_drop', type=float, default=0.1)
 parser.add_argument('--fc_drop', type=float, default=0.4)
 parser.add_argument('--ker_sz', type=int, default=7)
 parser.add_argument('--out_channel', type=int, default=250)
+parser.add_argument('--lr', type=float, default=0.0012, help='Learning rate')
+parser.add_argument('--decay_rate', type=float, default=0.998, help='Learning rate decay rate')
+parser.add_argument('--lamb', type=float, default=0.00014, help='L2 regularization coefficient')
+parser.add_argument('--hidden_dim', type=int, default=64, help='Dimension of hidden layers')
+parser.add_argument('--attn_dim', type=int, default=5, help='Attention dimension')
+parser.add_argument('--dropout', type=float, default=0.01, help='Dropout rate')
+parser.add_argument('--act', type=str, default='tanh', help='Activation function')
+parser.add_argument('--n_batch', type=int, default=10, help='Number of batches')
+parser.add_argument('--n_tbatch', type=int, default=10, help='Number of time batches')
+
 
 
 args = parser.parse_args()
@@ -57,58 +67,6 @@ if __name__ == '__main__':
     opts.n_ent = loader.n_ent
     opts.n_rel = loader.n_rel
         
-    if dataset == 'umls':
-        opts.lr = 0.0012
-        opts.decay_rate = 0.998
-        opts.lamb = 0.00014
-        opts.hidden_dim = 64
-        opts.attn_dim = 5
-        opts.dropout = 0.01
-        opts.act = 'tanh'
-        opts.n_node_topk = [opts.topk] * opts.layers
-        opts.n_edge_topk = -1
-        opts.n_layer = opts.layers
-        opts.n_batch = opts.n_tbatch = 10
-
-    elif dataset == 'wn':
-        opts.lr = 0.0030
-        opts.decay_rate = 0.994
-        opts.lamb = 0.00014
-        opts.hidden_dim = 64 # 64
-        opts.attn_dim = 5
-        opts.n_node_topk = [opts.topk] * opts.layers
-        opts.n_edge_topk = -1
-        opts.n_layer = opts.layers
-        opts.dropout = 0.02
-        opts.act = 'idd'
-        opts.n_batch = opts.n_tbatch = 50 # 50
-
-    elif dataset == 'WN18RR':
-        opts.lr = 0.0030
-        opts.decay_rate = 0.994
-        opts.lamb = 0.00014
-        opts.hidden_dim = 64 # 64
-        opts.attn_dim = 5
-        opts.n_node_topk = [opts.topk] * opts.layers
-        opts.n_edge_topk = -1
-        opts.n_layer = opts.layers
-        opts.dropout = 0.02
-        opts.act = 'idd'
-        opts.n_batch = opts.n_tbatch = 50 # 50
-        
-    elif dataset == 'fb15k-237':
-        opts.lr = 0.0009
-        opts.decay_rate = 0.9938
-        opts.lamb = 0.000080
-        opts.hidden_dim = 48
-        opts.attn_dim = 5
-        opts.n_node_topk = [opts.topk] * opts.layers
-        opts.n_edge_topk = -1
-        opts.n_layer = opts.layers
-        opts.dropout = 0.0391
-        opts.act = 'idd'
-        opts.n_batch = opts.n_tbatch = 20 # 10
-    
     # check all output paths
     checkPath('./results/')
     checkPath(f'./results/{dataset}/')
