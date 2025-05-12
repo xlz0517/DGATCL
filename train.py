@@ -103,11 +103,6 @@ if __name__ == '__main__':
                     best_v_mrr = v_mrr
                     best_str = out_str
                     print(best_str)
-                    # BestMetricStr = f'ValMRR_{str(v_mrr)[:5]}_TestMRR_{str(t_mrr)[:5]}'
-                    # model.saveModelToFiles(BestMetricStr, deleteLastFile=False)
-        
-        # show the final result
-        print(best_str)
 
         # 将best_str写到文件的第一行
         with open(opts.perf_file, 'r') as f:
@@ -119,7 +114,7 @@ if __name__ == '__main__':
             f.writelines(temp_lines)
 
     if opts.eval:
-        # evaluate on test set with loaded weight to save time
+        
         result_dict, out_str = model.evaluate(eval_val=False, eval_test=True, verbose=True)
         print(result_dict, '\n', out_str)
         
