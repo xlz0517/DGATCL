@@ -56,29 +56,26 @@ class GNNLayer(torch.nn.Module):
         num_nodes = node_index.shape[0]
         msg_content = src_entity_feat - relation_feat
 
-        # 注意力
-        attn_raw = self.w_alpha(
+        attn_raw_edge = self.w_alpha(
             nn.ReLU()(self.Ws_attn(src_entity_feat) + self.Wr_attn(relation_feat) + self.Wqr_attn(query_rel_expanded))
         )
-        attn_weights = torch.sigmoid(attn_raw)
-        msg_weighted = attn_weights * msg_content
-    
-        msg_aggregated = scatter(msg_weighted, index=edge_obj, dim=0, dim_size=num_nodes, reduce='max')
-        node_transformed = self.act(self.W_h(msg_aggregated)).clone()
-    
-        node_pair = torch.cat([node_transformed[edge_sub], node_transformed[edge_obj]], dim=-1)
-        attn_score = self.leaky_relu(self.attn_fc(node_pair)).squeeze(-1)
-        edge_weights = scatter_softmax(attn_score, edge_sub)
-        edge_weights = self.softmax(attn_score)
-
-        edge_msgs = self.W_node(node_transformed[edge_obj])
-        node_msg_updated = scatter(edge_weights.unsqueeze(-1) * edge_msgs,
-                                   edge_sub, dim=0, dim_size=num_nodes, reduce='sum')
-        updated_node_features = self.act(node_msg_updated)
-    
+        attn_weights_edge = torch.sigmoid(attn_raw_edge)
+        msg_weighted_edge = attn_weights_edge * msg_content
+        msg_aggregated_edge = scatter(msg_weighted_edge, index=edge_obj, dim=0, dim_size=num_nodes, reduce='max')
+        node_transformed_edge = self.act(self.W_h(msg_aggregated_edge)).clone()
+        
+        node_pair = torch.cat([node_transformed_edge[edge_sub], node_transformed_edge[edge_obj]], dim=-1)
+        attn_score_node = self.leaky_relu(self.attn_fc(node_pair)).squeeze(-1)
+        edge_weights_node = scatter_softmax(attn_score_node, edge_sub)
+        edge_msgs_node = self.W_node(node_transformed_edge[edge_obj])
+        node_msg_updated_node = scatter(edge_weights_node.unsqueeze(-1) * edge_msgs_node,
+                                        edge_sub, dim=0, dim_size=num_nodes, reduce='sum')
+        node_transformed_node = self.act(node_msg_updated_node)
+        combined = torch.stack([node_transformed_edge, node_transformed_node], dim=0)
+        updated_node_features = combined.sum(dim=0)
         if self.n_node_topk <= 0:
             return updated_node_features
-        # 采样
+        
         diff_flags = torch.ones(num_nodes)
         diff_flags[old_node_map] = 0
         diff_mask = diff_flags.bool()
@@ -167,7 +164,6 @@ class GNNModel(torch.nn.Module):
     
         entity_features = torch.zeros(batch_size, self.hidden_dim, device=device)
 
-        # 多层gnn之间的消息传递
         for layer_idx in range(self.n_layer):
             sampled_node_pairs, edge_index_matrix, index_old_to_new = self.loader.get_neighbors(
                 batch_entity_pairs.data.cpu().numpy(),
