@@ -2,31 +2,24 @@ import numpy as np
 from scipy.stats import rankdata
 import os
 
-def checkPath(path):
-    if not os.path.exists(path):
-        os.mkdir(path)
-    return
+def check_path(directory):
+    os.makedirs(directory, exist_ok=True)
 
-def cal_ranks(scores, labels, filters):
-    scores = scores - np.min(scores, axis=1, keepdims=True) + 1e-8
-    full_rank = rankdata(-scores, method='average', axis=1)
-    filter_scores = scores * filters
-    filter_rank = rankdata(-filter_scores, method='min', axis=1)
-    ranks = (full_rank - filter_rank + 1) * labels
-    ranks = ranks[np.nonzero(ranks)]
-    return list(ranks)
+def cal_ranks(score_matrix, label_mask, filter_mask):
+    norm_scores = score_matrix - np.min(score_matrix, axis=1, keepdims=True) + 1e-8
+    full_ranks = rankdata(-norm_scores, method='average', axis=1)
+    filtered_ranks = rankdata(-norm_scores * filter_mask, method='min', axis=1)
+    raw_ranks = (full_ranks - filtered_ranks + 1) * label_mask
+    return list(raw_ranks[raw_ranks != 0])
 
-def cal_performance(ranks):
-    mrr = (1. / ranks).sum() / len(ranks)
-    mr = ranks.mean()
-    h_1 = sum(ranks<=1) * 1.0 / len(ranks)
-    h_3 = sum(ranks<=3) * 1.0 / len(ranks)
-    h_10 = sum(ranks<=10) * 1.0 / len(ranks)
-    return mrr, mr, h_1, h_3, h_10
+def cal_performance(rank_list):
+    rank_array = np.asarray(rank_list)
+    reciprocal_rank = 1. / rank_array
+    mrr = reciprocal_rank.mean()
+    mr = rank_array.mean()
+    hits_at = lambda k: np.mean(rank_array <= k)
+    return mrr, mr, hits_at(1), hits_at(3), hits_at(10)
 
-def uniqueWithoutSort(a):
-    indexes = np.unique(a, return_index=True)[1]
-    res = [a[index] for index in sorted(indexes)]
-    return res
-
-
+def unique_without_sort(sequence):
+    _, first_indices = np.unique(sequence, return_index=True)
+    return list(np.array(sequence)[np.sort(first_indices)])
