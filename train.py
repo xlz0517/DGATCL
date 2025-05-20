@@ -7,6 +7,7 @@ from torch.optim.lr_scheduler import ExponentialLR
 from gnn import GNN, ContrastiveLoss
 from load_data import DataLoader
 from tqdm import tqdm
+from scipy.stats import rankdata
 
 class Base(object):
     def __init__(self, args, loader):
@@ -82,7 +83,7 @@ class Base(object):
 
         self.loader.shuffle_train()
 
-    def evaluate(self, verbose=True, eval_val=True, eval_test=False, recordDistance=False):
+    def eval(self, verbose=True, eval_val=True, eval_test=False, recordDistance=False):
         batch_size = self.n_tbatch
         n_valid_data = self.n_valid
         n_test_data = self.n_test
