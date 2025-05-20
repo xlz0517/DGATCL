@@ -4,10 +4,17 @@ import argparse
 import torch
 import numpy as np
 from load_data import DataLoader
-from base import Base
-from utils import *
+from trian import Base
 
-parser = argparse.ArgumentParser(description="Parser for DGATCL")
+parser.add_argument('--eval_interval', type=int, default=1)
+parser.add_argument("--neg_sample_ratio", type=int, default=2)
+parser.add_argument('--k_h', type=int, default=10)
+parser.add_argument('--k_w', type=int, default=20)
+parser.add_argument('--ent_drop_pred', type=float, default=0.3)
+parser.add_argument('--conv_drop', type=float, default=0.1)
+parser.add_argument('--fc_drop', type=float, default=0.4)
+parser.add_argument('--ker_sz', type=int, default=7)
+parser.add_argument('--out_channel', type=int, default=250)
 parser.add_argument('--data_path', type=str, default='data/fb15k-237/')
 parser.add_argument('--seed', type=int, default=1234)
 parser.add_argument('--gpu', type=int, default=-1)
@@ -25,28 +32,19 @@ parser.add_argument('--scheduler', type=str, default='exp')
 parser.add_argument('--remove_1hop_edges', action='store_true')
 parser.add_argument('--fact_ratio', type=float, default=0.96)
 parser.add_argument('--epoch', type=int, default=150)
-parser.add_argument('--eval_interval', type=int, default=1)
-parser.add_argument("--neg_sample_ratio", type=int, default=2, help="description for experiment")
-parser.add_argument('--k_h', type=int, default=10)
-parser.add_argument('--k_w', type=int, default=20)
-parser.add_argument('--ent_drop_pred', type=float, default=0.3)
-parser.add_argument('--conv_drop', type=float, default=0.1)
-parser.add_argument('--fc_drop', type=float, default=0.4)
-parser.add_argument('--ker_sz', type=int, default=7)
-parser.add_argument('--out_channel', type=int, default=250)
 parser.add_argument('--lr', type=float, default=0.0012, help='Learning rate')
-parser.add_argument('--decay_rate', type=float, default=0.998, help='Learning rate decay rate')
-parser.add_argument('--lamb', type=float, default=0.00014, help='L2 regularization coefficient')
-parser.add_argument('--hidden_dim', type=int, default=64, help='Dimension of hidden layers')
-parser.add_argument('--attn_dim', type=int, default=5, help='Attention dimension')
-parser.add_argument('--dropout', type=float, default=0.01, help='Dropout rate')
-parser.add_argument('--act', type=str, default='tanh', help='Activation function')
-parser.add_argument('--n_batch', type=int, default=10, help='Number of batches')
-parser.add_argument('--n_tbatch', type=int, default=10, help='Number of time batches')
-
-
-
+parser.add_argument('--decay_rate', type=float, default=0.998)
+parser.add_argument('--lamb', type=float, default=0.00014)
+parser.add_argument('--hidden_dim', type=int, default=64)
+parser.add_argument('--attn_dim', type=int, default=5)
+parser.add_argument('--dropout', type=float, default=0.01)
+parser.add_argument('--act', type=str, default='tanh')
+parser.add_argument('--n_batch', type=int, default=10)
+parser.add_argument('--n_tbatch', type=int, default=10)
 args = parser.parse_args()
+
+def check_path(directory):
+    os.makedirs(directory, exist_ok=True)
 
 if __name__ == '__main__':
     opts = args
@@ -66,18 +64,13 @@ if __name__ == '__main__':
     loader = DataLoader(opts)
     opts.n_ent = loader.n_ent
     opts.n_rel = loader.n_rel
-        
-    # check all output paths
-    checkPath('./results/')
-    checkPath(f'./results/{dataset}/')
-    checkPath(f'{loader.task_dir}/saveModel/')
+    check_Path('./results/')
+    check_Path(f'./results/{dataset}/')
 
     model = Base(opts, loader)
     opts.perf_file = f'results/{dataset}/{model.modelName}_perf.txt'
-    print(f'==> perf_file: {opts.perf_file}')
     
     config_str = '%.4f, %.4f, %.6f,  %d, %d, %d, %d, %.4f,%s\n' % (opts.lr, opts.decay_rate, opts.lamb, opts.hidden_dim, opts.attn_dim, opts.n_layer, opts.n_batch, opts.dropout, opts.act)
-    print(config_str)
     with open(opts.perf_file, 'a+') as f:
         f.write(config_str)  
 
@@ -96,7 +89,6 @@ if __name__ == '__main__':
                 result_dict, out_str = model.evaluate(eval_val=True, eval_test=True)
                 v_mrr, t_mrr = result_dict['v_mrr'], result_dict['t_mrr']
                 out_str = '(epoch:' + str(epoch)+ ') ' + out_str
-                print()
                 with open(opts.perf_file, 'a+') as f:
                     f.write(out_str)
                 if v_mrr > best_v_mrr:
@@ -114,7 +106,5 @@ if __name__ == '__main__':
             f.writelines(temp_lines)
 
     if opts.eval:
-        
         result_dict, out_str = model.evaluate(eval_val=False, eval_test=True, verbose=True)
-        print(result_dict, '\n', out_str)
         
