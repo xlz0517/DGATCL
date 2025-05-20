@@ -4,7 +4,7 @@ import argparse
 import torch
 import numpy as np
 from load_data import DataLoader
-from trian import Base
+from train import Base
 
 parser.add_argument('--eval_interval', type=int, default=1)
 parser.add_argument("--neg_sample_ratio", type=int, default=2)
@@ -86,7 +86,7 @@ if __name__ == '__main__':
             model.train_batch()
             # eval on val/test set
             if (epoch+1) % args.eval_interval == 0:
-                result_dict, out_str = model.evaluate(eval_val=True, eval_test=True)
+                result_dict, out_str = model.eval(eval_val=True, eval_test=True)
                 v_mrr, t_mrr = result_dict['v_mrr'], result_dict['t_mrr']
                 out_str = '(epoch:' + str(epoch)+ ') ' + out_str
                 with open(opts.perf_file, 'a+') as f:
@@ -106,5 +106,5 @@ if __name__ == '__main__':
             f.writelines(temp_lines)
 
     if opts.eval:
-        result_dict, out_str = model.evaluate(eval_val=False, eval_test=True, verbose=True)
+        result_dict, out_str = model.eval(eval_val=False, eval_test=True, verbose=True)
         
