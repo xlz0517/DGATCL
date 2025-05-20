@@ -7,10 +7,10 @@ from torch_scatter import scatter, scatter_softmax
 from collections import defaultdict
 
 
-class GNNLayer(torch.nn.Module):
-    def __init__(self, in_dim, out_dim, attn_dim, n_rel, n_ent, n_node_topk=-1, n_edge_topk=-1, tau=1.0,
+class Layer(torch.nn.Module):
+    def __init__(self, in_dim, out_dim, attn_dim, n_rel, n_ent, n_node_topk=-1, tau=1.0,
                  act=lambda x: x):
-        super(GNNLayer, self).__init__()
+        super(Layer, self).__init__()
         self.n_rel = n_rel
         self.n_ent = n_ent
         self.in_dim = in_dim
@@ -18,7 +18,6 @@ class GNNLayer(torch.nn.Module):
         self.attn_dim = attn_dim
         self.act = act
         self.n_node_topk = n_node_topk
-        self.n_edge_topk = n_edge_topk
         self.tau = tau
         self.rela_embed = nn.Embedding(2 * n_rel + 1, in_dim)
         self.Ws_attn = nn.Linear(in_dim, attn_dim, bias=False)
@@ -31,18 +30,6 @@ class GNNLayer(torch.nn.Module):
         self.attn_fc = nn.Linear(2 * in_dim, 1)
         self.W_node = nn.Linear(in_dim, in_dim)     
         self.leaky_relu = nn.LeakyReLU(0.2)
-
-    def train(self, mode=True):
-        if not isinstance(mode, bool):
-            raise ValueError("training mode is expected to be boolean")
-        self.training = mode
-        if self.training and self.tau > 0:
-            self.softmax = lambda x: F.gumbel_softmax(x, tau=self.tau, hard=False)
-        else:
-            self.softmax = lambda x: F.softmax(x, dim=1)
-        for module in self.children():
-            module.train(mode)
-        return self
 
     def forward(self, query_subs, query_rels, node_features, edge_index, node_index, old_node_map, batch_size):
         edge_sub = edge_index[:, 4]
@@ -109,10 +96,20 @@ class GNNLayer(torch.nn.Module):
 
         return final_node_features, new_node_index, same_mask
 
-
+    def train(self, mode=True):
+        if not isinstance(mode, bool):
+            raise ValueError("training mode is expected to be boolean")
+        self.training = mode
+        if self.training and self.tau > 0:
+            self.softmax = lambda x: F.gumbel_softmax(x, tau=self.tau, hard=False)
+        else:
+            self.softmax = lambda x: F.softmax(x, dim=1)
+        for module in self.children():
+            module.train(mode)
+        return self
     
 
-class GNNModel(torch.nn.Module):
+class GNN(torch.nn.Module):
     def __init__(self, params, loader):
         super(GNNModel, self).__init__()
         self.n_layer = params.n_layer
@@ -121,19 +118,18 @@ class GNNModel(torch.nn.Module):
         self.n_ent = params.n_ent
         self.n_rel = params.n_rel
         self.n_node_topk = params.n_node_topk
-        self.n_edge_topk = params.n_edge_topk
         self.loader = loader
         acts = {'relu': nn.ReLU(), 'tanh': torch.tanh, 'idd': lambda x: x}
         act = acts[params.act]
 
-        self.gnn_layers = []
+        self.layers = []
         for i in range(self.n_layer):
             i_n_node_topk = self.n_node_topk if 'int' in str(type(self.n_node_topk)) else self.n_node_topk[i]
-            self.gnn_layers.append(GNNLayer(self.hidden_dim, self.hidden_dim, self.attn_dim, self.n_rel, self.n_ent, \
-                                            n_node_topk=i_n_node_topk, n_edge_topk=self.n_edge_topk, tau=params.tau,
+            self.layers.append(Layer(self.hidden_dim, self.hidden_dim, self.attn_dim, self.n_rel, self.n_ent, \
+                                            n_node_topk=i_n_node_topk, tau=params.tau,
                                             act=act))
 
-        self.gnn_layers = nn.ModuleList(self.gnn_layers)
+        self.layers = nn.ModuleList(self.layers)
         self.dropout = nn.Dropout(params.dropout)
         self.W_final = nn.Linear(self.hidden_dim, 1, bias=False)
         self.gate = nn.GRU(self.hidden_dim, self.hidden_dim)
@@ -141,14 +137,14 @@ class GNNModel(torch.nn.Module):
     def updateTopkNums(self, topk_list):
         assert len(topk_list) == self.n_layer
         for idx in range(self.n_layer):
-            self.gnn_layers[idx].n_node_topk = topk_list[idx]
+            self.layers[idx].n_node_topk = topk_list[idx]
 
     def fixSamplingWeight(self):
         def freeze(m):
             m.requires_grad = False
 
         for i in range(self.n_layer):
-            self.gnn_layers[i].W_samp.apply(freeze)
+            self.layers[i].W_samp.apply(freeze)
 
     def forward(self, input_sub_ids, input_rel_ids, mode='train'):
         batch_size = len(input_sub_ids)
@@ -172,7 +168,7 @@ class GNNModel(torch.nn.Module):
             )
             total_sampled_nodes = sampled_node_pairs.size(0)
     
-            entity_features, sampled_node_pairs, selected_node_indices = self.gnn_layers[layer_idx](
+            entity_features, sampled_node_pairs, selected_node_indices = self.layers[layer_idx](
                 query_sub_ids, query_rel_ids, entity_features,
                 edge_index_matrix, sampled_node_pairs,
                 index_old_to_new, batch_size
