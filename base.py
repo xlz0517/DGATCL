@@ -4,7 +4,7 @@ import os
 import time
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ExponentialLR
-from gnnmodel import GNNModel, ContrastiveLoss
+from gnn import GNN, ContrastiveLoss
 from utils import *
 from load_data import DataLoader
 from tqdm import tqdm
