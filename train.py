@@ -5,7 +5,6 @@ import time
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ExponentialLR
 from gnn import GNN, ContrastiveLoss
-from utils import *
 from load_data import DataLoader
 from tqdm import tqdm
 
@@ -26,23 +25,9 @@ class Base(object):
         self.scheduler = ExponentialLR(self.optimizer, args.decay_rate) if args.scheduler == 'exp' else None
         self.modelName = f'{args.n_layer}-layers'
         self.modelName += ''.join([f'-{args.n_node_topk[i] if isinstance(args.n_node_topk, list) else args.n_node_topk}' for i in range(args.n_layer)])
-        print(f'==> model name: {self.modelName}')
 
     def _update(self):
         self.optimizer = Adam(self.model.parameters(), lr=self.args.lr, weight_decay=self.args.lamb)
-
-    def saveModelToFiles(self, best_metric, deleteLastFile=True):
-        savePath = f'{self.loader.task_dir}/saveModel/{self.modelName}-{best_metric}.pt'
-        print(f'Save checkpoint to : {savePath}')
-        torch.save({
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'best_mrr': best_metric,
-        }, savePath)
-        if deleteLastFile and self.lastSaveGNNPath:
-            print(f'Remove last checkpoint: {self.lastSaveGNNPath}')
-            os.remove(self.lastSaveGNNPath)
-        self.lastSaveGNNPath = savePath
 
     def loadModel(self, filePath, layers=-1):
         print(f'Load weight from {filePath}')
@@ -117,19 +102,19 @@ class Base(object):
                 for i, (sub, rel) in enumerate(zip(subs, rels)):
                     filt = self.loader.filters[(sub, rel)]
                     filters[i][np.array(filt)] = 1
-                ranks = cal_ranks(scores, objs, np.array(filters))
+                ranks = rank(scores, objs, np.array(filters))
                 result += ranks
             return np.array(result)
 
         if eval_val:
             v_ranking = eval_data(n_valid_data, 'valid')
-            v_mrr, v_mr, v_h1, v_h3, v_h10 = cal_performance(v_ranking)
+            v_mrr, v_mr, v_h1, v_h3, v_h10 = calculate(v_ranking)
         else:
             v_mrr = v_mr = v_h1 = v_h3 = v_h10 = 0
 
         if eval_test:
             t_ranking = eval_data(n_test_data, 'test')
-            t_mrr, t_mr, t_h1, t_h3, t_h10 = cal_performance(t_ranking)
+            t_mrr, t_mr, t_h1, t_h3, t_h10 = calculate(t_ranking)
         else:
             t_mrr = t_mr = t_h1 = t_h3 = t_h10 = -1
 
@@ -141,3 +126,18 @@ class Base(object):
         result_dict = {'v_mrr': v_mrr, 'v_mr': v_mr, 'v_h1': v_h1, 'v_h3': v_h3, 'v_h10': v_h10,
                        't_mrr': t_mrr, 't_h1': t_h1, 't_h3': t_h3, 't_h10': t_h10}
         return result_dict, out_str
+        
+def rank(score_matrix, label_mask, filter_mask):
+    norm_scores = score_matrix - np.min(score_matrix, axis=1, keepdims=True) + 1e-8
+    full_ranks = rankdata(-norm_scores, method='average', axis=1)
+    filtered_ranks = rankdata(-norm_scores * filter_mask, method='min', axis=1)
+    raw_ranks = (full_ranks - filtered_ranks + 1) * label_mask
+    return list(raw_ranks[raw_ranks != 0])
+
+def calculate(rank_list):
+    rank_array = np.asarray(rank_list)
+    reciprocal_rank = 1. / rank_array
+    mrr = reciprocal_rank.mean()
+    mr = rank_array.mean()
+    hits_at = lambda k: np.mean(rank_array <= k)
+    return mrr, mr, hits_at(1), hits_at(3), hits_at(10)
