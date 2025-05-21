@@ -6,7 +6,6 @@ import numpy as np
 from torch_scatter import scatter, scatter_softmax
 from collections import defaultdict
 
-
 class Layer(torch.nn.Module):
     def __init__(self, in_dim, out_dim, attn_dim, n_rel, n_ent, n_node_topk=-1, tau=1.0,
                  act=lambda x: x):
